@@ -46,3 +46,4 @@ make test
 4. Если добавили свой язык в скрипты, то сделайте PR в данный репозиторий :)
 
 вывод тестов:
+<img width="457" height="179" alt="image" src="https://github.com/user-attachments/assets/4130c170-287e-4e68-a9a8-be59171b5617" />
