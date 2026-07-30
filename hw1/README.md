@@ -59,3 +59,7 @@
 ```bash
 make test
 ```
+
+## Результат
+<img width="732" height="307" alt="image" src="https://github.com/user-attachments/assets/c95e8627-8e85-4b04-b528-c50169845a41" />
+
