@@ -1,0 +1,369 @@
+openapi: 3.0.3
+info:
+  title: Image Service - HW4
+  version: 0.4.0
+  description: >-
+    API загрузки и обработки PNG/JPEG через Kafka. Пользователи и задачи хранятся в PostgreSQL, сессии — в Redis. Исходники и результаты находятся в общем файловом томе.
+    Результат обработки всегда PNG. Сессия действует 24 часа.
+security:
+  - bearerAuth: []
+paths:
+  /register:
+    post:
+      summary: Зарегистрировать пользователя
+      operationId: register
+      security: []
+      requestBody:
+        $ref: '#/components/requestBodies/Credentials'
+      responses:
+        '201':
+          description: Пользователь создан; для получения токена выполните вход
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [user_id, username]
+                properties:
+                  user_id:
+                    type: string
+                    format: uuid
+                  username:
+                    type: string
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '409':
+          description: Логин уже занят
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '413':
+          $ref: '#/components/responses/TooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          $ref: '#/components/responses/StorageUnavailable'
+  /login:
+    post:
+      summary: Войти и создать сессию
+      description: Каждый успешный вход создаёт отдельный токен на 24 часа.
+      operationId: login
+      security: []
+      requestBody:
+        $ref: '#/components/requestBodies/Credentials'
+      responses:
+        '200':
+          description: Сессия создана
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [token]
+                properties:
+                  token:
+                    type: string
+                    description: Случайный непрозрачный токен сессии, не JWT
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '413':
+          $ref: '#/components/responses/TooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          $ref: '#/components/responses/StorageUnavailable'
+  /task:
+    post:
+      summary: Загрузить изображение и отправить задачу в Kafka
+      operationId: createTask
+      description: >-
+        Максимум 10 MiB на изображение, 11 MiB на весь запрос. PNG или JPEG,
+        не более 4096 по каждой стороне и 8 миллионов пикселей. Владелец берётся из сессии.
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [image, filter]
+              properties:
+                image:
+                  type: string
+                  format: binary
+                filter:
+                  type: string
+                  description: >-
+                    JSON-строка с name и parameters. Имена negative, flip_x, blur, sharpen.
+                    Для blur/sharpen обязателен parameters.sigma (0 < sigma <= 10).
+                    flip_x переворачивает верх и низ. Для negative/flip_x sigma не задаётся.
+                  example: '{"name":"blur","parameters":{"sigma":1.2}}'
+      responses:
+        '201':
+          description: Исходник и задача сохранены; публикация в Kafka выполняется в фоне
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [task_id]
+                properties:
+                  task_id: {type: string, format: uuid}
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '413':
+          $ref: '#/components/responses/TooLarge'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          $ref: '#/components/responses/StorageUnavailable'
+  /status/{task_id}:
+    get:
+      summary: Получить статус своей задачи
+      operationId: taskStatus
+      parameters:
+        - $ref: '#/components/parameters/TaskID'
+      responses:
+        '200':
+          description: in_progress, ready или failed с полем error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Status'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/StorageUnavailable'
+  /image/{task_id}:
+    get:
+      summary: Скачать свой исходник
+      operationId: originalImage
+      parameters:
+        - $ref: '#/components/parameters/TaskID'
+      responses:
+        '200':
+          description: Исходное изображение без изменения байтов
+          content:
+            image/png:
+              schema: {type: string, format: binary}
+            image/jpeg:
+              schema: {type: string, format: binary}
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          $ref: '#/components/responses/StorageUnavailable'
+  /result/{task_id}:
+    get:
+      summary: Скачать результат своей задачи
+      operationId: taskResult
+      parameters:
+        - $ref: '#/components/parameters/TaskID'
+      responses:
+        '200':
+          description: Обработанная картинка PNG
+          content:
+            image/png:
+              schema: {type: string, format: binary}
+        '202':
+          description: Задача ещё в очереди или обрабатывается
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Status'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          description: Обработка задачи завершилась ошибкой
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          $ref: '#/components/responses/StorageUnavailable'
+  /commit:
+    post:
+      summary: Служебный callback обработчика
+      operationId: commit
+      description: >-
+        Требуется отдельный INTERNAL_TOKEN, пользовательский токен не подходит.
+        Обработчик сначала атомарно записывает result/<task_id>.png, затем вызывает этот маршрут.
+        Если error непустой, задача становится failed. Повторный callback не меняет терминальный статус.
+      security:
+        - processorAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [task_id]
+              properties:
+                task_id: {type: string, format: uuid}
+                error: {type: string}
+      responses:
+        '204':
+          description: Результат принят или задача уже имеет терминальный статус
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '403':
+          description: Отсутствует или неверен секрет обработчика
+        '404':
+          description: Задача не найдена
+        '409':
+          description: Файл результата отсутствует или не имеет допустимого PNG-заголовка
+        '503':
+          $ref: '#/components/responses/StorageUnavailable'
+  /healthz:
+    get:
+      summary: Проверить доступность HTTP-процесса
+      description: Не является проверкой PostgreSQL, Redis, Kafka или прогресса обработчика.
+      operationId: health
+      security: []
+      responses:
+        '200':
+          description: HTTP-сервер работает
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: {type: string, example: ok}
+  /metrics:
+    get:
+      summary: Метрики API для Prometheus
+      security: []
+      responses:
+        '200':
+          description: Счётчики HTTP и гистограммы времени
+          content:
+            text/plain:
+              schema: {type: string}
+components:
+  securitySchemes:
+    processorAuth:
+      type: http
+      scheme: bearer
+      description: INTERNAL_TOKEN из конфигурации API и обработчика, не токен пользователя.
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: Токен из POST /login; заголовок Authorization с префиксом Bearer.
+  requestBodies:
+    Credentials:
+      required: true
+      description: Один JSON-объект, максимум 4096 байт. Неизвестные поля запрещены.
+      content:
+        application/json:
+          schema:
+            type: object
+            additionalProperties: false
+            required: [username, password]
+            properties:
+              username:
+                type: string
+                pattern: '^[a-zA-Z0-9_]{3,32}$'
+                description: Латинские буквы, цифры и подчёркивание; регистр учитывается.
+                example: student
+              password:
+                type: string
+                format: password
+                writeOnly: true
+                description: От 8 до 128 байт UTF-8; пробелы не обрезаются.
+  parameters:
+    TaskID:
+      name: task_id
+      in: path
+      required: true
+      schema:
+        type: string
+      description: UUID задачи. Неизвестный или чужой идентификатор даёт 404.
+  schemas:
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: string
+    Status:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [in_progress, ready, failed]
+        error:
+          type: string
+          description: Причина ошибки для failed
+  responses:
+    StorageUnavailable:
+      description: Хранилище временно недоступно; ошибка инфраструктуры не означает неверную сессию
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    BadRequest:
+      description: Неверные поля, JSON, multipart, фильтр или изображение
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Unauthorized:
+      description: Неверные данные входа либо токен отсутствует, неверен или истёк
+      headers:
+        WWW-Authenticate:
+          schema:
+            type: string
+            example: Bearer
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error: unauthorized
+    TooLarge:
+      description: Превышен лимит размера; credentials 4096 байт, изображение 10 MiB, multipart 11 MiB
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    UnsupportedMediaType:
+      description: Требуется Content-Type application/json
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    InternalError:
+      description: Внутренняя ошибка сервера
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    NotFound:
+      description: Задача не найдена или принадлежит другому пользователю
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [error]
+            properties:
+              error:
+                type: string
+                example: task not found
+

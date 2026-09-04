@@ -1,0 +1,12 @@
+*
+!go.mod
+!go.sum
+!*.go
+!docs/
+!docs/openapi.yaml
+!internal/
+!internal/**
+!processor/
+!processor/**
+!migrations/
+!migrations/**

@@ -1,0 +1,11 @@
+/server
+/server.exe
+/image-service
+/image-service.exe
+/.env
+/data/
+/processor-bin
+/processor-bin.exe
+__pycache__/
+*.pdf
+.env.*
