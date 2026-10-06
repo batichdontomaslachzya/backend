@@ -7,6 +7,7 @@ import (
 
 type Semaphore struct {
 	permits uint32
+	waiters uint32
 }
 
 func New(n int) *Semaphore {
@@ -20,7 +21,11 @@ func (s *Semaphore) Acquire() {
 	for {
 		c := atomic.LoadUint32(&s.permits)
 		if c == 0 {
-			futex.Wait(&s.permits, 0)
+			atomic.AddUint32(&s.waiters, 1)
+			if atomic.LoadUint32(&s.permits) == 0 {
+				futex.Wait(&s.permits, 0)
+			}
+			atomic.AddUint32(&s.waiters, ^uint32(0))
 			continue
 		}
 		if atomic.CompareAndSwapUint32(&s.permits, c, c-1) {
@@ -43,7 +48,9 @@ func (s *Semaphore) TryAcquire() bool {
 
 func (s *Semaphore) Release() {
 	atomic.AddUint32(&s.permits, 1)
-	futex.Wake(&s.permits)
+	if atomic.LoadUint32(&s.waiters) != 0 {
+		futex.Wake(&s.permits)
+	}
 }
 
 func (s *Semaphore) Available() int {
